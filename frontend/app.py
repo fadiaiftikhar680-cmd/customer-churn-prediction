@@ -1,194 +1,165 @@
-import streamlit as st  
-import requests
-import pandas as pd     
-import json
+import streamlit as st
+import pandas as pd
+import numpy as np
+import joblib
 
-# --- CONFIGURATION & PAGE SETUP ---
-st.set_page_config(
-    page_title="Customer Churn Analytics",
-    page_icon="📊",
-    layout="wide"
-)
+# 1. Load Model and Scaler directly from the frontend/models directory
+@st.cache_resource
+def load_assets():
+    model = joblib.load("frontend/models/churn_model.pkl")
+    scaler = joblib.load("frontend/models/scaler.pkl")
+    return model, scaler
 
-# BACKEND URL
-BACKEND_URL = "http://127.0.0.1:8000"
+try:
+    model, scaler = load_assets()
+except Exception as e:
+    st.error(f"Error loading model files: {e}")
 
-st.title("📊 Customer Churn Prediction System")
-st.markdown("---")
+# Custom Mapping Dictionary for user input transformation
+MAPPING = {
+    'gender': {'Male': 1, 'Female': 0},
+    'Partner': {'Yes': 1, 'No': 0},
+    'Dependents': {'Yes': 1, 'No': 0},
+    'PhoneService': {'Yes': 1, 'No': 0},
+    'MultipleLines': {'Yes': 2, 'No': 0, 'No phone service': 1},
+    'InternetService': {'Fiber optic': 1, 'DSL': 0, 'No': 2},
+    'OnlineSecurity': {'Yes': 2, 'No': 0, 'No internet service': 1},
+    'OnlineBackup': {'Yes': 2, 'No': 0, 'No internet service': 1},
+    'DeviceProtection': {'Yes': 2, 'No': 0, 'No internet service': 1},
+    'TechSupport': {'Yes': 2, 'No': 0, 'No internet service': 1},
+    'StreamingTV': {'Yes': 2, 'No': 0, 'No internet service': 1},
+    'StreamingMovies': {'Yes': 2, 'No': 0, 'No internet service': 1},
+    'Contract': {'Month-to-month': 0, 'One year': 1, 'Two year': 2},
+    'PaperlessBilling': {'Yes': 1, 'No': 0},
+    'PaymentMethod': {
+        'Electronic check': 2, 'Mailed check': 3, 
+        'Bank transfer (automatic)': 0, 'Credit card (automatic)': 1
+    }
+}
 
-# --- SIDEBAR NAVIGATION ---
-st.sidebar.title("Navigation")
-app_mode = st.sidebar.selectbox("Choose Mode", ["Home & Health", "Single Prediction", "Batch Prediction (CSV File)"])
+st.set_page_config(page_title="Customer Churn Analytics", layout="wide")
+st.title("📊 Customer Churn Prediction Dashboard")
+st.write("Predict individual customer churn or upload a batch file for instant analytics.")
 
-# ==============================================================================
-# 1. HOME & HEALTH MODE
-# ==============================================================================
-if app_mode == "Home & Health":
-    st.subheader("Business Context & System Health")
-    
-    col1, col2 = st.columns(2)
+tabs = st.tabs(["👤 Single Customer Prediction", "📂 Bulk Batch Prediction"])
+
+# Exact columns order expected by your scaler (with customerID)
+SCALER_COLUMNS_ORDER = [
+    'customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents', 'tenure', 
+    'PhoneService', 'MultipleLines', 'InternetService', 'OnlineSecurity', 
+    'OnlineBackup', 'DeviceProtection', 'TechSupport', 'StreamingTV', 
+    'StreamingMovies', 'Contract', 'PaperlessBilling', 'PaymentMethod', 
+    'MonthlyCharges', 'TotalCharges'
+]
+
+# --- TAB 1: SINGLE PREDICTION ---
+with tabs[0]:
+    st.subheader("Enter Customer Details")
+    col1, col2, col3 = st.columns(3)
     
     with col1:
-        st.info("### API Health Status")
-        try:
-            health_res = requests.get(f"{BACKEND_URL}/health", timeout=5).json()
-            st.success(f"🟢 Backend Status: {health_res['status'].upper()}")
-            st.write(f"💬 Message: {health_res['message']}")
-        except Exception as e:
-            st.error(f"🔴 Backend Offline: Could not connect to FastAPI at {BACKEND_URL}")
-            st.write(f"Error Details: {str(e)}")
-            
-    with col2:
-        st.info("### Model Information")
-        try:
-            model_res = requests.get(f"{BACKEND_URL}/model-info", timeout=5).json()
-            st.success(f"🤖 Model Architecture: **{model_res['model_name']}**")
-            st.write(f"🔢 Total Features Used: `{model_res['features_count']}`")
-        except Exception as e:
-            st.error("🔴 Model info unavailable.")
+        gender = st.selectbox("Gender", ["Male", "Female"])
+        SeniorCitizen = st.selectbox("Senior Citizen (Age >= 65)", [0, 1])
+        Partner = st.selectbox("Has Partner?", ["Yes", "No"])
+        Dependents = st.selectbox("Has Dependents?", ["Yes", "No"])
+        tenure = st.number_input("Tenure (Months)", min_value=0, max_value=100, value=12)
+        PhoneService = st.selectbox("Phone Service", ["Yes", "No"])
 
-# ==============================================================================
-# 2. SINGLE PREDICTION MODE (Updated with Explanations)
-# ==============================================================================
-elif app_mode == "Single Prediction":
-    st.subheader("👤 Individual Customer Churn Analysis")
-    st.write("Enter the customer details below to evaluate churn risk and view driving factors.")
-    
-    # Form Layout
-    with st.form(key="single_customer_form"):
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            customerID = st.text_input("Customer ID", value="1234-ABCD")
-            gender = st.selectbox("Gender", ["Male", "Female"])
-            SeniorCitizen = st.selectbox("Senior Citizen (1=Yes, 0=No)", [0, 1])
-            Partner = st.selectbox("Has Partner?", ["Yes", "No"])
-            Dependents = st.selectbox("Has Dependents?", ["Yes", "No"])
-            tenure = st.number_input("Tenure (Months)", min_value=0, max_value=120, value=12)
-            
-        with col2:
-            PhoneService = st.selectbox("Phone Service", ["Yes", "No"])
-            MultipleLines = st.selectbox("Multiple Lines", ["No phone service", "No", "Yes"])
-            InternetService = st.selectbox("Internet Service", ["DSL", "Fiber optic", "No"])
-            OnlineSecurity = st.selectbox("Online Security", ["No", "Yes", "No internet service"])
-            OnlineBackup = st.selectbox("Online Backup", ["No", "Yes", "No internet service"])
-            DeviceProtection = st.selectbox("Device Protection", ["No", "Yes", "No internet service"])
-            
-        with col3:
-            TechSupport = st.selectbox("Tech Support", ["No", "Yes", "No internet service"])
-            StreamingTV = st.selectbox("Streaming TV", ["No", "Yes", "No internet service"])
-            StreamingMovies = st.selectbox("Streaming Movies", ["No", "Yes", "No internet service"])
-            Contract = st.selectbox("Contract Type", ["Month-to-month", "One year", "Two year"])
-            PaperlessBilling = st.selectbox("Paperless Billing", ["Yes", "No"])
-            PaymentMethod = st.selectbox("Payment Method", ["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"])
-            
-        st.markdown("---")
-        c1, c2 = st.columns(2)
-        with c1:
-            MonthlyCharges = st.number_input("Monthly Charges ($)", min_value=0.0, value=65.5)
-        with c2:
-            TotalCharges = st.text_input("Total Charges ($)", value="785.0")
-            
-        submit_button = st.form_submit_button(label="🔮 Predict Churn")
-        
-    if submit_button:
-        payload = {
-            "customerID": customerID, "gender": gender, "SeniorCitizen": int(SeniorCitizen),
-            "Partner": Partner, "Dependents": Dependents, "tenure": int(tenure),
-            "PhoneService": PhoneService, "MultipleLines": MultipleLines, "InternetService": InternetService,
-            "OnlineSecurity": OnlineSecurity, "OnlineBackup": OnlineBackup, "DeviceProtection": DeviceProtection,
-            "TechSupport": TechSupport, "StreamingTV": StreamingTV, "StreamingMovies": StreamingMovies,
-            "Contract": Contract, "PaperlessBilling": PaperlessBilling, "PaymentMethod": PaymentMethod,
-            "MonthlyCharges": float(MonthlyCharges), "TotalCharges": str(TotalCharges)
+    with col2:
+        MultipleLines = st.selectbox("Multiple Lines", ["No", "Yes", "No phone service"])
+        InternetService = st.selectbox("Internet Service Provider", ["DSL", "Fiber optic", "No"])
+        OnlineSecurity = st.selectbox("Online Security Service", ["No", "Yes", "No internet service"])
+        OnlineBackup = st.selectbox("Online Backup Service", ["No", "Yes", "No internet service"])
+        DeviceProtection = st.selectbox("Device Protection Service", ["No", "Yes", "No internet service"])
+        TechSupport = st.selectbox("Tech Support Service", ["No", "Yes", "No internet service"])
+
+    with col3:
+        StreamingTV = st.selectbox("Streaming TV", ["No", "Yes", "No internet service"])
+        StreamingMovies = st.selectbox("Streaming Movies", ["No", "Yes", "No internet service"])
+        Contract = st.selectbox("Contract Type", ["Month-to-month", "One year", "Two year"])
+        PaperlessBilling = st.selectbox("Paperless Billing", ["Yes", "No"])
+        PaymentMethod = st.selectbox("Payment Method", ["Electronic check", "Mailed check", "Bank transfer (automatic)", "Credit card (automatic)"])
+        MonthlyCharges = st.number_input("Monthly Charges ($)", min_value=0.0, value=50.0)
+        TotalCharges = st.number_input("Total Charges ($)", min_value=0.0, value=600.0)
+
+    if st.button("Predict Churn Risk", type="primary"):
+        input_data = {
+            'customerID': 0, # Dummy numerical value for scaler satisfaction
+            'gender': gender, 'SeniorCitizen': SeniorCitizen, 'Partner': Partner, 'Dependents': Dependents,
+            'tenure': tenure, 'PhoneService': PhoneService, 'MultipleLines': MultipleLines,
+            'InternetService': InternetService, 'OnlineSecurity': OnlineSecurity, 'OnlineBackup': OnlineBackup,
+            'DeviceProtection': DeviceProtection, 'TechSupport': TechSupport, 'StreamingTV': StreamingTV,
+            'StreamingMovies': StreamingMovies, 'Contract': Contract, 'PaperlessBilling': PaperlessBilling,
+            'PaymentMethod': PaymentMethod, 'MonthlyCharges': MonthlyCharges, 'TotalCharges': TotalCharges
         }
         
-        with st.spinner("Analyzing customer profile..."):
-            try:
-                response = requests.post(f"{BACKEND_URL}/predict", json=payload)
-                if response.status_code == 200:
-                    result = response.json()
-                    prediction = result['prediction']
-                    probability = result['churn_probability']
-                    risk_factors = result.get('top_risk_factors', [])
+        # Encoding Categorical inputs using mapping
+        encoded_data = {}
+        for col, val in input_data.items():
+            if col in MAPPING:
+                encoded_data[col] = MAPPING[col][val]
+            else:
+                encoded_data[col] = val
+                
+        df_features = pd.DataFrame([encoded_data])
+        
+        # Reorder columns to match fit time exactly
+        df_features = df_features[SCALER_COLUMNS_ORDER]
+        
+        # Scale & Predict directly in app
+        scaled_features = scaler.transform(df_features)
+        prediction = model.predict(scaled_features)[0]
+        probability = model.predict_proba(scaled_features)[0][1]
+        
+        st.write("---")
+        if prediction == 1:
+            st.error(f"🚨 High Risk Customer! Churn Probability: {probability:.2%}")
+        else:
+            st.success(f"✅ Loyal Customer. Churn Probability: {probability:.2%}")
 
-                    st.markdown("---")
-                    st.subheader("🎯 Prediction Results")
-                    
-                    if prediction == "Churn":
-                        st.error(f"### 🔥 Alert: Customer is likely to **CHURN**!")
-                        st.metric(label="Churn Probability Score", value=probability)
-                        
-                        st.warning("#### 📋 Why is this customer at risk? (Model Explanation)")
-                        st.write("Model ke analysis ke mutabik yeh top factors customer ko churn ki taraf push kar rahe hain:")
-                        for factor in risk_factors:
-                            st.write(f"- 🔴 **{factor}**")
-                            
-                        st.info("💡 **Retention Strategy Recommendation:** Is customer ko loyalty discount, personalized support call, ya long-term contract features upgrade offer karein.")
-                    else:
-                        st.success(f"### ✅ Great! Customer is **LOYAL** (Not Churn).")
-                        st.metric(label="Churn Probability Score", value=probability)
-                        
-                        st.info("#### 📋 Top Driving Factors for Loyalty:")
-                        st.write("In attributes ki wajah se customer business ke sath sustain kar raha hai:")
-                        for factor in risk_factors:
-                            st.write(f"- 🟢 **{factor}**")
-                else:
-                    st.error(f"API Error: {response.text}")
-            except Exception as e:
-                st.error(f"Connection failed to backend: {str(e)}")
-
-# ==============================================================================
-# 3. BATCH PREDICTION MODE
-# ==============================================================================
-elif app_mode == "Batch Prediction (CSV File)":
-    st.subheader("📁 Bulk Customer Batch Processing")
-    st.write("Upload a CSV file containing multiple customer records to perform bulk analysis.")
-    
+# --- TAB 2: BATCH PREDICTION ---
+with tabs[1]:
+    st.subheader("Upload CSV File for Batch Analytics")
     uploaded_file = st.file_uploader("Choose a CSV file", type=["csv"])
     
     if uploaded_file is not None:
-        try:
-            df = pd.read_csv(uploaded_file)
-            st.success("CSV File Uploaded Successfully!")
-            st.write("### Raw Data Preview (First 5 Rows):")
-            st.dataframe(df.head(5))
-            
-            if st.button("🚀 Process Bulk Predictions"):
-                required_cols = [
-                    'customerID', 'gender', 'SeniorCitizen', 'Partner', 'Dependents',
-                    'tenure', 'PhoneService', 'MultipleLines', 'InternetService',
-                    'OnlineSecurity', 'OnlineBackup', 'DeviceProtection', 'TechSupport',
-                    'StreamingTV', 'StreamingMovies', 'Contract', 'PaperlessBilling',
-                    'PaymentMethod', 'MonthlyCharges', 'TotalCharges'
-                ]
+        raw_df = pd.read_csv(uploaded_file)
+        st.write("📋 Raw Data Sample:", raw_df.head(3))
+        
+        if st.button("Process Batch Predictions"):
+            try:
+                processed_df = raw_df.copy()
                 
-                missing_cols = [col for col in required_cols if col not in df.columns]
-                if missing_cols:
-                    st.error(f"Invalid CSV structure. Missing columns: {missing_cols}")
+                # If uploaded CSV doesn't have customerID, create a dummy one
+                if 'customerID' not in processed_df.columns:
+                    processed_df['customerID'] = 0
                 else:
-                    df_filled = df.fillna("")
-                    records = df_filled.to_dict(orient="records")
-                    payload = {"customers": records}
+                    # If it exists but is text, map it temporarily to numbers for scaler
+                    processed_df['customerID'] = 0
                     
-                    with st.spinner("Processing batch on server..."):
-                        response = requests.post(f"{BACKEND_URL}/predict-batch", json=payload)
-                        if response.status_code == 200:
-                            batch_results = response.json()["batch_results"]
-                            res_df = pd.DataFrame(batch_results)
-                            final_df = pd.merge(df, res_df, on="customerID", how="left")
-                            
-                            st.success("🎉 Batch Processing Completed Successfully!")
-                            st.write("### Processed Results View:")
-                            st.dataframe(final_df[['customerID', 'prediction', 'churn_probability']].head(20))
-                            
-                            csv = final_df.to_csv(index=False).encode('utf-8')
-                            st.download_button(
-                                label="📥 Download Full Predictions CSV File",
-                                data=csv,
-                                file_name="customer_churn_predictions_output.csv",
-                                mime="text/csv"
-                            )
-                        else:
-                            st.error(f"Batch prediction endpoint failed: {response.text}")
-        except Exception as e:
-            st.error(f"Error reading file: {str(e)}")
+                for col in MAPPING:
+                    if col in processed_df.columns:
+                        processed_df[col] = processed_df[col].map(MAPPING[col])
+                
+                # Align exact column order including customerID
+                processed_df = processed_df[SCALER_COLUMNS_ORDER]
+                
+                scaled_batch = scaler.transform(processed_df)
+                predictions = model.predict(scaled_batch)
+                probabilities = model.predict_proba(scaled_batch)[:, 1]
+                
+                raw_df['Churn_Prediction'] = ['Churn' if p == 1 else 'No Churn' for p in predictions]
+                raw_df['Churn_Probability'] = probabilities
+                
+                st.write("---")
+                st.success("🎯 Batch Processing Completed!")
+                st.dataframe(raw_df)
+                
+                # Dashboard analytical metrics
+                total_cust = len(raw_df)
+                churned_cust = sum(predictions)
+                st.metric("Total Customers Evaluated", total_cust)
+                st.metric("Predicted Churn Cases", f"{churned_cust} ({churned_cust/total_cust:.1%})")
+                
+            except Exception as ex:
+                st.error(f"Encoding/Scaler Error: Make sure columns match perfectly. Details: {ex}")
